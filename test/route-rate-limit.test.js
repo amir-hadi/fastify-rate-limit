@@ -156,6 +156,72 @@ test('With ips whitelist', t => {
   })
 })
 
+test('With redis store and pre handler', t => {
+  t.plan(19)
+  const fastify = Fastify()
+  const redis = new Redis({ host: REDIS_HOST })
+  fastify.register(rateLimit, {
+    global: false,
+    redis: redis
+  })
+
+  fastify.get('/', {
+    preHandler: function (req, reply, next) {
+      t.pass('preHandler called')
+      next()
+    },
+    config: {
+      rateLimit: {
+        max: 2,
+        timeWindow: 1000
+      }
+    }
+  }, (req, reply) => {
+    reply.send('hello!')
+  })
+
+  fastify.inject('/', (err, res) => {
+    t.error(err)
+    t.strictEqual(res.statusCode, 200)
+    t.strictEqual(res.headers['x-ratelimit-limit'], 2)
+    t.strictEqual(res.headers['x-ratelimit-remaining'], 1)
+
+    fastify.inject('/', (err, res) => {
+      t.error(err)
+      t.strictEqual(res.statusCode, 200)
+      t.strictEqual(res.headers['x-ratelimit-limit'], 2)
+      t.strictEqual(res.headers['x-ratelimit-remaining'], 0)
+
+      fastify.inject('/', (err, res) => {
+        t.error(err)
+        t.strictEqual(res.statusCode, 429)
+        t.strictEqual(res.headers['content-type'], 'application/json')
+        t.strictEqual(res.headers['x-ratelimit-limit'], 2)
+        t.strictEqual(res.headers['x-ratelimit-remaining'], 0)
+        t.strictEqual(res.headers['retry-after'], 1000)
+        t.deepEqual({
+          statusCode: 429,
+          error: 'Too Many Requests',
+          message: 'Rate limit exceeded, retry in 1 second'
+        }, JSON.parse(res.payload))
+
+        setTimeout(retry, 1100)
+      })
+    })
+  })
+
+  function retry () {
+    fastify.inject('/', (err, res) => {
+      redis.flushall(noop)
+      redis.quit(noop)
+      t.error(err)
+      t.strictEqual(res.statusCode, 200)
+      t.strictEqual(res.headers['x-ratelimit-limit'], 2)
+      t.strictEqual(res.headers['x-ratelimit-remaining'], 1)
+    })
+  }
+})
+
 test('With redis store', t => {
   t.plan(19)
   const fastify = Fastify()
